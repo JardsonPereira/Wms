@@ -4,152 +4,176 @@ import datetime
 import plotly.express as px
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="NexLOG | WMS Intelligence", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="NexLOG Papelaria | WMS Pro", layout="wide")
 
-# Custom CSS para estética "High-Tech"
+# Estilização para Interface Profissional
 st.markdown("""
     <style>
-    .main { background-color: #f5f7f9; }
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #004b95; color: white; }
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #e1e4e8; }
+    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
+    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #f0f2f6; border-radius: 5px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- INICIALIZAÇÃO DE DADOS ---
-if 'db' not in st.session_state:
-    st.session_state.db = pd.DataFrame(columns=[
-        'ID', 'Produto', 'Categoria', 'Custo', 'Giro_Previsto', 'Classe', 'Endereco', 'Saldo', 'Status'
+# --- INICIALIZAÇÃO DO BANCO DE DADOS ---
+if 'db_papelaria' not in st.session_state:
+    st.session_state.db_papelaria = pd.DataFrame(columns=[
+        'SKU', 'Produto', 'Categoria', 'Preco_Custo', 'Giro_Mensal', 'Classe_ABC', 
+        'Zona_Endereco', 'Estoque_Atual', 'Status'
     ])
 
-if 'fluxo' not in st.session_state:
-    st.session_state.fluxo = {'exp': False, 'dist': False}
+if 'fluxo_ativo' not in st.session_state:
+    st.session_state.fluxo_ativo = {'expedicao': False, 'distribuicao': False}
 
-# --- MOTOR DE INTELIGÊNCIA LOGÍSTICA ---
-def atualizar_inteligencia(df):
+# --- MOTOR LOGÍSTICO (CURVA ABC & ZONAS) ---
+def inteligência_estoque(df):
     if df.empty: return df
-    # Cálculo Curva ABC (Baseado no valor de estoque teórico e giro)
-    df['Impacto'] = df['Custo'].astype(float) * df['Giro_Previsto'].astype(float)
+    # ABC baseado em Valor x Giro (Impacto Financeiro)
+    df['Impacto'] = df['Preco_Custo'].astype(float) * df['Giro_Mensal'].astype(float)
     df = df.sort_values(by='Impacto', ascending=False)
-    df['Perc'] = df['Impacto'].cumsum() / df['Impacto'].sum()
+    df['Soma_Acum'] = df['Impacto'].cumsum() / df['Impacto'].sum()
     
-    def classe_abc(p):
+    def definir_abc(p):
         if p <= 0.7: return 'A'
         elif p <= 0.9: return 'B'
         else: return 'C'
         
-    df['Classe'] = df['Perc'].apply(classe_abc)
-    # Endereçamento Inteligente: Classe A na Rua 1 (Próximo à doca)
-    df['Endereco'] = df['Classe'].apply(lambda x: f"R{ord(x)-64}-N0{datetime.datetime.now().microsecond % 9}-P{datetime.datetime.now().microsecond % 5}")
+    df['Classe_ABC'] = df['Soma_Acum'].apply(definir_abc)
+    
+    # Endereçamento por Zonas da Papelaria
+    # Zona 1: Frente (Itens A), Zona 2: Meio (Itens B), Zona 3: Fundo (Itens C)
+    df['Zona_Endereco'] = df['Classe_ABC'].apply(
+        lambda x: f"ZONA-0{ord(x)-64}-PRAT-{datetime.datetime.now().microsecond % 20:02d}"
+    )
     return df
 
-# --- BARRA LATERAL (AUTENTICAÇÃO) ---
+# --- LOGIN E SEGURANÇA ---
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/2343/2343894.png", width=100)
-    st.title("NexLOG WMS")
-    st.info("**Acesso Rápido:**\n\nAdmin: `admin123` | Conf: `conf123` ")
+    st.title("📦 WMS Papelaria")
+    st.image("https://cdn-icons-png.flaticon.com/512/2611/2611152.png", width=80)
+    st.divider()
+    st.write("**Acessos do Sistema:**")
+    st.code("ADM: admin123\nCONF: conf123")
     
-    user = st.selectbox("Usuário", ["Conferente", "Administrador"])
-    pw = st.text_input("Senha", type="password")
+    perfil = st.selectbox("Escolha o Perfil", ["Conferente", "Administrador"])
+    senha = st.text_input("Senha de Acesso", type="password")
 
-# --- LÓGICA DE NAVEGAÇÃO ---
-if (user == "Administrador" and pw == "admin123") or (user == "Conferente" and pw == "conf123"):
+# Autenticação
+if (perfil == "Administrador" and senha == "admin123") or (perfil == "Conferente" and senha == "conf123"):
     
-    if user == "Administrador":
-        st.title("🛡️ Dashboard de Gestão Estratégica")
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("SKUs Cadastrados", len(st.session_state.db))
-        m2.metric("Valor Total em Estoque", f"R$ {(st.session_state.db['Saldo'] * st.session_state.db['Custo']).sum():,.2f}")
-        m3.metric("Acuracidade", "100%", "0.5%")
-        m4.metric("Status Expedição", "LIBERADO" if st.session_state.fluxo['exp'] else "BLOQUEADO")
-
-        aba_cad, aba_inv, aba_ctr = st.tabs(["🆕 Cadastro de SKU", "📊 BI & Inventário", "⚙️ Controle de Fluxo"])
-
-        with aba_cad:
-            with st.form("cad_sku"):
-                c1, c2 = st.columns(2)
-                nome = c1.text_input("Nome do Material")
-                cat = c1.selectbox("Categoria", ["Suprimentos", "Papelaria", "TI", "Mobiliário"])
-                custo = c2.number_input("Custo Unitário", min_value=0.01)
-                giro = c2.number_input("Demanda Mensal Estimada", min_value=1)
-                if st.form_submit_button("Finalizar Cadastro"):
-                    novo = pd.DataFrame([{
-                        'ID': len(st.session_state.db)+1, 'Produto': nome, 'Categoria': cat,
-                        'Custo': custo, 'Giro_Previsto': giro, 'Saldo': 0, 'Status': 'Ativo'
-                    }])
-                    st.session_state.db = pd.concat([st.session_state.db, novo], ignore_index=True)
-                    st.session_state.db = atualizar_inteligencia(st.session_state.db)
-                    st.success("SKU Cadastrado com Estratégia de Endereçamento!")
-
-        with aba_inv:
-            st.dataframe(st.session_state.db[['ID', 'Produto', 'Classe', 'Endereco', 'Saldo', 'Custo']], use_container_width=True)
-            if not st.session_state.db.empty:
-                fig = px.pie(st.session_state.db, names='Classe', title="Ocupação por Curva ABC", hole=0.4)
-                st.plotly_chart(fig)
-
-        with aba_ctr:
-            st.subheader("Configurações de Operação")
-            st.session_state.fluxo['exp'] = st.toggle("Habilitar Módulo de Expedição", st.session_state.fluxo['exp'])
-            st.session_state.fluxo['dist'] = st.toggle("Habilitar Módulo de Distribuição", st.session_state.fluxo['dist'], disabled=not st.session_state.fluxo['exp'])
-            if st.button("Limpar Logs de Sistema"): st.toast("Logs limpos!")
-
-    if user == "Conferente":
-        st.title("🚀 Operação de Fluxo")
-        menu = ["📥 Recebimento", "🔍 Conferência", "📍 Endereçamento", "📦 Armazenamento"]
-        if st.session_state.fluxo['exp']: menu.append("📤 Expedição")
-        if st.session_state.fluxo['dist']: menu.append("🚚 Distribuição")
+    # --- ÁREA DO ADMINISTRADOR (ESTRATÉGIA) ---
+    if perfil == "Administrador":
+        st.title("🛡️ Painel de Gestão - Papelaria")
         
-        tarefa = st.sidebar.radio("Etapa do Processo", menu)
+        # KPIs em tempo real
+        k1, k2, k3 = st.columns(3)
+        total_skus = len(st.session_state.db_papelaria)
+        valor_inv = (st.session_state.db_papelaria['Estoque_Atual'] * st.session_state.db_papelaria['Preco_Custo']).sum()
+        
+        k1.metric("Total de Itens (SKUs)", total_skus)
+        k2.metric("Valor em Estoque", f"R$ {valor_inv:,.2f}")
+        k3.metric("Status Operacional", "LIBERADO" if st.session_state.fluxo_ativo['expedicao'] else "AGUARDANDO")
+
+        tab_cad, tab_bi, tab_config = st.tabs(["📝 Cadastro de Itens", "📊 BI & Curva ABC", "🔐 Liberação de Fluxo"])
+
+        with tab_cad:
+            with st.form("form_papelaria"):
+                col1, col2 = st.columns(2)
+                nome_p = col1.text_input("Descrição do Produto (Ex: Caderno 10 Matérias)")
+                cat_p = col1.selectbox("Categoria", ["Escrita", "Papéis", "Escolar", "Escritório", "Presentes"])
+                custo_p = col2.number_input("Preço de Custo (R$)", min_value=0.01)
+                giro_p = col2.number_input("Previsão de Vendas/Mês", min_value=1)
+                
+                if st.form_submit_button("Cadastrar e Gerar Endereço"):
+                    novo_item = pd.DataFrame([{
+                        'SKU': f"PAP-{len(st.session_state.db_papelaria)+1:03d}",
+                        'Produto': nome_p, 'Categoria': cat_p, 'Preco_Custo': custo_p,
+                        'Giro_Mensal': giro_p, 'Estoque_Atual': 0, 'Status': 'Ativo'
+                    }])
+                    st.session_state.db_papelaria = pd.concat([st.session_state.db_papelaria, novo_item], ignore_index=True)
+                    st.session_state.db_papelaria = inteligência_estoque(st.session_state.db_papelaria)
+                    st.success(f"Produto {nome_p} registrado com sucesso!")
+
+        with tab_bi:
+            if not st.session_state.db_papelaria.empty:
+                st.dataframe(st.session_state.db_papelaria[['SKU', 'Produto', 'Classe_ABC', 'Zona_Endereco', 'Estoque_Atual']], use_container_width=True)
+                fig = px.pie(st.session_state.db_papelaria, names='Classe_ABC', title="Composição Curva ABC (Valor x Giro)", hole=0.5)
+                st.plotly_chart(fig)
+            else:
+                st.info("Aguardando cadastro de produtos.")
+
+        with tab_config:
+            st.subheader("Controle de Segurança da Equipe")
+            st.session_state.fluxo_ativo['expedicao'] = st.toggle("Ativar Módulo de Expedição", st.session_state.fluxo_ativo['expedicao'])
+            st.session_state.fluxo_ativo['distribuicao'] = st.toggle("Ativar Módulo de Distribuição", st.session_state.fluxo_ativo['distribuicao'], 
+                                                                    disabled=not st.session_state.fluxo_ativo['expedicao'])
+
+    # --- ÁREA DO CONFERENTE (OPERAÇÃO) ---
+    if perfil == "Conferente":
+        st.title("📋 Terminal de Operação")
+        
+        menus = ["📥 Recebimento", "🔍 Conferência", "🏷️ Endereçamento", "📦 Armazenamento"]
+        if st.session_state.fluxo_ativo['expedicao']: menus.append("📤 Expedição")
+        if st.session_state.fluxo_ativo['distribuicao']: menus.append("🚚 Distribuição")
+        
+        tarefa = st.sidebar.radio("Selecione a Operação:", menus)
 
         if tarefa == "📥 Recebimento":
-            st.subheader("Entrada de Inbound")
-            prod = st.selectbox("Selecionar Item em Doca", st.session_state.db['Produto'])
-            st.number_input("Quantidade da Nota Fiscal", min_value=1)
-            if st.button("Iniciar Conferência"): st.warning("Mova o palete para a zona de conferência.")
+            st.header("Entrada de Mercadoria")
+            if st.session_state.db_papelaria.empty: st.warning("Nenhum item cadastrado.")
+            else:
+                sel = st.selectbox("Selecione o Item Chegando", st.session_state.db_papelaria['Produto'])
+                st.number_input("Qtd conforme Nota Fiscal", min_value=1)
+                st.button("Registrar Chegada na Doca")
 
         elif tarefa == "🔍 Conferência":
-            st.subheader("Verificação de Qualidade e Qtd")
-            sel = st.selectbox("Confirmar Produto", st.session_state.db['Produto'])
-            qtd = st.number_input("Quantidade Contada", min_value=1)
-            if st.button("Validar"): st.success("Conferência cega bateu com a NF!")
+            st.header("Conferência Cega")
+            st.info("Abra as caixas e conte os itens individualmente.")
+            st.selectbox("Item em conferência", st.session_state.db_papelaria['Produto'])
+            st.number_input("Quantidade Contada", min_value=0)
+            if st.button("Validar Contagem"): st.success("Conferência finalizada!")
 
-        elif tarefa == "📍 Endereçamento":
-            st.subheader("Etiquetagem Inteligente")
-            sel = st.selectbox("Produto para Etiquetar", st.session_state.db['Produto'])
-            idx = st.session_state.db.index[st.session_state.db['Produto'] == sel][0]
-            end = st.session_state.db.at[idx, 'Endereco']
+        elif tarefa == "🏷️ Endereçamento":
+            st.header("Etiquetagem de Produto")
+            item_etq = st.selectbox("Gerar Etiqueta para:", st.session_state.db_papelaria['Produto'])
+            idx = st.session_state.db_papelaria.index[st.session_state.db_papelaria['Produto'] == item_etq][0]
+            
+            # Etiqueta visual de ponta
             st.markdown(f"""
-                <div style="background:white; border:2px dashed #333; padding:20px; text-align:center; color:black">
-                    <h3>ETIQUETA NEXLOG</h3>
-                    <h1 style="font-size: 50px">{end}</h1>
-                    <p><b>{sel}</b> | CLASSE {st.session_state.db.at[idx, 'Classe']}</p>
-                </div>
+            <div style="background-color:white; border:5px solid black; padding:20px; color:black; text-align:center; font-family:monospace">
+                <p style="margin:0">WMS PAPELARIA - ETIQUETA INTERNA</p>
+                <h1 style="margin:10px 0">{st.session_state.db_papelaria.at[idx, 'Zona_Endereco']}</h1>
+                <p style="font-size:20px"><b>{item_etq}</b></p>
+                <p>SKU: {st.session_state.db_papelaria.at[idx, 'SKU']} | CLASSE: {st.session_state.db_papelaria.at[idx, 'Classe_ABC']}</p>
+            </div>
             """, unsafe_allow_html=True)
 
         elif tarefa == "📦 Armazenamento":
-            st.subheader("Put-away (Guardada)")
-            sel = st.selectbox("Confirmar Guardada no Endereço", st.session_state.db['Produto'])
-            qtd_a = st.number_input("Qtd Guardada", min_value=1)
-            if st.button("Confirmar Armazenamento"):
-                idx = st.session_state.db.index[st.session_state.db['Produto'] == sel][0]
-                st.session_state.db.at[idx, 'Saldo'] += qtd_a
-                st.balloons()
-                st.success("Estoque Atualizado!")
+            st.header("Put-away (Guardar no Estoque)")
+            sel_arm = st.selectbox("Confirmar Guardada:", st.session_state.db_papelaria['Produto'])
+            qtd_arm = st.number_input("Quantidade que está indo para prateleira", min_value=1)
+            if st.button("Confirmar e Atualizar Saldo"):
+                idx = st.session_state.db_papelaria.index[st.session_state.db_papelaria['Produto'] == sel_arm][0]
+                st.session_state.db_papelaria.at[idx, 'Estoque_Atual'] += qtd_arm
+                st.success(f"Estoque atualizado! Saldo atual de {sel_arm}: {st.session_state.db_papelaria.at[idx, 'Estoque_Atual']}")
 
         elif tarefa == "📤 Expedição":
-            st.subheader("Picking (Separação)")
-            sel = st.selectbox("Produto para Saída", st.session_state.db['Produto'])
-            qtd_s = st.number_input("Qtd para Picking", min_value=1)
-            idx = st.session_state.db.index[st.session_state.db['Produto'] == sel][0]
+            st.header("Picking e Checkout")
+            sel_exp = st.selectbox("Item para Pedido de Cliente", st.session_state.db_papelaria['Produto'])
+            qtd_exp = st.number_input("Quantidade a retirar", min_value=1)
+            idx_exp = st.session_state.db_papelaria.index[st.session_state.db_papelaria['Produto'] == sel_exp][0]
+            
             if st.button("Confirmar Saída"):
-                if st.session_state.db.at[idx, 'Saldo'] >= qtd_s:
-                    st.session_state.db.at[idx, 'Saldo'] -= qtd_s
-                    st.success("Saída autorizada!")
-                else: st.error("Erro: Estoque insuficiente!")
+                if st.session_state.db_papelaria.at[idx_exp, 'Estoque_Atual'] >= qtd_exp:
+                    st.session_state.db_papelaria.at[idx_exp, 'Estoque_Atual'] -= qtd_exp
+                    st.success("Saída confirmada! Pedido enviado para embalagem.")
+                else:
+                    st.error("ERRO: Saldo insuficiente em estoque!")
 
         elif tarefa == "🚚 Distribuição":
-            st.subheader("Last Mile / Distribuição")
-            st.info("Consolidando cargas para transporte...")
+            st.header("Despacho e Logística")
+            st.info("Aguardando coleta da transportadora ou motoboy...")
 
 else:
-    if pw: st.error("Acesso Negado")
-    else: st.warning("Aguardando Login...")
+    if senha: st.error("Acesso Negado. Senha incorreta.")
+    else: st.info("Seja bem-vindo. Por favor, faça o login no menu lateral.")
