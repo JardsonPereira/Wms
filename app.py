@@ -14,7 +14,7 @@ if 'db_papelaria' not in st.session_state:
     ])
 
 if 'nfs_liberadas' not in st.session_state:
-    st.session_state.nfs_liberadas = {} # Dicionário para armazenar Notas e seus itens
+    st.session_state.nfs_liberadas = {} 
 
 if 'fluxo_ativo' not in st.session_state:
     st.session_state.fluxo_ativo = {'conferencia': False, 'expedicao': False, 'distribuicao': False}
@@ -44,19 +44,14 @@ with st.sidebar:
     perfil = st.selectbox("Perfil", ["Conferente", "Administrador"])
     senha = st.text_input("Senha", type="password")
 
-# Autenticação
 if (perfil == "Administrador" and senha == "admin123") or (perfil == "Conferente" and senha == "conf123"):
     
     # --- ÁREA DO ADMINISTRADOR ---
     if perfil == "Administrador":
-        st.title("🛡️ Painel de Gestão Estratégica")
-        
-        tab_cad, tab_recebe, tab_bi, tab_config = st.tabs([
-            "📝 Cadastro de SKU", "📑 Recebimento (Bipar NF)", "📊 Dashboards", "🔐 Liberações"
-        ])
+        st.title("🛡️ Gestão de Recebimento")
+        tab_cad, tab_recebe, tab_bi = st.tabs(["📝 Cadastro", "📑 Bipar NF", "📊 Inventário"])
 
         with tab_cad:
-            st.subheader("Novo Produto no Mestre")
             with st.form("form_cad"):
                 c1, c2 = st.columns(2)
                 nome = c1.text_input("Descrição do Produto")
@@ -71,102 +66,79 @@ if (perfil == "Administrador" and senha == "admin123") or (perfil == "Conferente
                     }])
                     st.session_state.db_papelaria = pd.concat([st.session_state.db_papelaria, novo], ignore_index=True)
                     st.session_state.db_papelaria = inteligência_estoque(st.session_state.db_papelaria)
-                    st.success(f"SKU {nome} pronto para receber estoque.")
+                    st.success(f"{nome} cadastrado!")
 
         with tab_recebe:
-            st.subheader("Entrada e Auditoria de NF")
-            
-            # Simulação de Bipagem da Chave de Acesso
-            chave_nf = st.text_input("⚡ Bipar Chave de Acesso da NF (44 dígitos)")
-            
+            chave_nf = st.text_input("⚡ Bipar Chave da NF")
             if chave_nf:
-                st.divider()
-                st.markdown(f"**NF Detectada:** `{chave_nf[-10:]}`")
-                
-                num_skus = st.number_input("Quantos SKUs diferentes nesta nota?", min_value=1, step=1)
-                
+                num_skus = st.number_input("Qtd de SKUs na nota", min_value=1, step=1)
                 itens_nf = []
                 for i in range(num_skus):
-                    st.markdown(f"--- **Item {i+1}** ---")
                     col_a, col_b = st.columns(2)
-                    sku_sel = col_a.selectbox(f"Selecionar SKU {i+1}", st.session_state.db_papelaria['Produto'].tolist(), key=f"sku_{i}")
-                    qtd_item = col_b.number_input(f"Qtd para {sku_sel}", min_value=1, key=f"qtd_{i}")
-                    itens_nf.append({'item': sku_sel, 'qtd_esperada': qtd_item})
+                    sku_sel = col_a.selectbox(f"SKU {i+1}", st.session_state.db_papelaria['Produto'].tolist(), key=f"sku_{i}")
+                    qtd_item = col_b.number_input(f"Qtd {sku_sel}", min_value=1, key=f"qtd_{i}")
+                    itens_nf.append({'item': sku_sel, 'qtd_esperada': qtd_item, 'validado': False})
                 
-                if st.button("🚀 Liberar Nota para Conferência"):
-                    st.session_state.nfs_liberadas[chave_nf] = {
-                        'status': 'Pendente',
-                        'data': datetime.date.today(),
-                        'itens': itens_nf
-                    }
-                    st.session_state.fluxo_ativo['conferencia'] = True
-                    st.success("Nota enviada para o coletor do conferente!")
+                if st.button("🚀 Liberar para Conferência"):
+                    st.session_state.nfs_liberadas[chave_nf] = {'status': 'Pendente', 'itens': itens_nf}
+                    st.success("Nota enviada ao Conferente!")
 
         with tab_bi:
-            if not st.session_state.db_papelaria.empty:
-                st.dataframe(st.session_state.db_papelaria, use_container_width=True)
-                fig = px.bar(st.session_state.db_papelaria, x='Produto', y='Estoque_Atual', color='Classe_ABC', title="Saldo Real por SKU")
-                st.plotly_chart(fig)
-
-        with tab_config:
-            st.subheader("Cadeados Operacionais")
-            st.session_state.fluxo_ativo['expedicao'] = st.toggle("Liberar Expedição", value=st.session_state.fluxo_ativo['expedicao'])
-            st.session_state.fluxo_ativo['distribuicao'] = st.toggle("Liberar Distribuição", value=st.session_state.fluxo_ativo['distribuicao'], disabled=not st.session_state.fluxo_ativo['expedicao'])
+            st.dataframe(st.session_state.db_papelaria, use_container_width=True)
 
     # --- ÁREA DO CONFERENTE ---
     if perfil == "Conferente":
-        st.title("📋 Terminal de Campo")
-        
-        opcoes = []
-        if st.session_state.fluxo_ativo['conferencia']: opcoes.append("🔍 Conferência")
-        opcoes.extend(["🏷️ Endereçamento", "📦 Armazenamento"])
-        
-        if st.session_state.fluxo_ativo['expedicao']: opcoes.append("📤 Expedição")
-        if st.session_state.fluxo_ativo['distribuicao']: opcoes.append("🚚 Distribuição")
-        
-        tarefa = st.sidebar.radio("Tarefa:", opcoes)
+        st.title("📋 Terminal Operacional")
+        tarefa = st.sidebar.radio("Tarefa:", ["🔍 Conferência", "🏷️ Endereçamento", "📦 Armazenamento"])
 
         if tarefa == "🔍 Conferência":
-            st.header("Notas Aguardando Contagem")
-            if not st.session_state.nfs_liberadas:
-                st.info("Nenhuma nota bipada pelo Administrador.")
+            st.header("Notas para Contagem")
+            
+            # Filtra apenas notas que ainda possuem itens não validados
+            nfs_ativas = {k: v for k, v in st.session_state.nfs_liberadas.items() if any(not i['validado'] for i in v['itens'])}
+            
+            if not nfs_ativas:
+                st.info("✅ Tudo limpo! Nenhuma nota pendente de conferência.")
             else:
-                for chave, dados in st.session_state.nfs_liberadas.items():
-                    with st.expander(f"NF: ...{chave[-6:]} - Status: {dados['status']}"):
+                for chave, dados in nfs_ativas.items():
+                    with st.expander(f"📦 NF: ...{chave[-6:]}", expanded=True):
                         for i, item in enumerate(dados['itens']):
-                            st.write(f"**{item['item']}** | Esperado: {item['qtd_esperada']}")
-                            qtd_contada = st.number_input(f"Contagem Real de {item['item']}", min_value=0, key=f"conf_{chave}_{i}")
-                            
-                            if st.button(f"Validar {item['item']}", key=f"btn_{chave}_{i}"):
-                                if qtd_contada == item['qtd_esperada']:
-                                    st.success("Bateu! Prossiga para etiquetagem.")
-                                else:
-                                    st.error(f"Divergência! Avisar ADM. (Faltam/Sobram {abs(qtd_contada - item['qtd_esperada'])} un)")
+                            # O item só aparece se ainda não foi validado
+                            if not item['validado']:
+                                st.write(f"👉 **Contar:** {item['item']}")
+                                col1, col2 = st.columns([2, 1])
+                                qtd_c = col1.number_input(f"Qtd Real de {item['item']}", min_value=0, key=f"c_{chave}_{i}")
+                                if col2.button("Validar", key=f"b_{chave}_{i}"):
+                                    if qtd_c == item['qtd_esperada']:
+                                        item['validado'] = True
+                                        st.rerun() # Atualiza a tela para remover o item validado
+                                    else:
+                                        st.error("Divergência detectada!")
 
         elif tarefa == "🏷️ Endereçamento":
-            st.header("Etiquetagem")
-            sel_e = st.selectbox("Gerar Etiqueta:", st.session_state.db_papelaria['Produto'])
-            idx_e = st.session_state.db_papelaria.index[st.session_state.db_papelaria['Produto'] == sel_e][0]
-            st.markdown(f"""
-            <div style="background:white; border:4px solid black; padding:15px; color:black; text-align:center">
-                <h2>{st.session_state.db_papelaria.at[idx_e, 'Zona_Endereco']}</h2>
-                <p>{sel_e}</p>
-            </div>
-            """, unsafe_allow_html=True)
+            st.header("Etiquetas Pendentes")
+            # Só permite endereçar itens que já foram validados na conferência
+            itens_prontos = []
+            for nf in st.session_state.nfs_liberadas.values():
+                for i in nf['itens']:
+                    if i['validado']: itens_prontos.append(i['item'])
+            
+            if not itens_prontos:
+                st.warning("Nenhum item validado para endereçamento.")
+            else:
+                sel_e = st.selectbox("Gerar Etiqueta:", list(set(itens_prontos)))
+                idx_e = st.session_state.db_papelaria.index[st.session_state.db_papelaria['Produto'] == sel_e][0]
+                st.markdown(f"""<div style="background:white; border:4px solid black; padding:15px; color:black; text-align:center">
+                    <h2>{st.session_state.db_papelaria.at[idx_e, 'Zona_Endereco']}</h2><p>{sel_e}</p></div>""", unsafe_allow_html=True)
 
         elif tarefa == "📦 Armazenamento":
-            st.header("Confirmar Guardada")
-            sel_a = st.selectbox("Produto Finalizado:", st.session_state.db_papelaria['Produto'])
-            qtd_a = st.number_input("Qtd Guardada no Box", min_value=1)
-            if st.button("Atualizar Estoque Real"):
+            st.header("Guardar no Estoque")
+            sel_a = st.selectbox("Produto para Armazenar:", st.session_state.db_papelaria['Produto'])
+            qtd_a = st.number_input("Qtd Guardada", min_value=1)
+            if st.button("Finalizar Ciclo"):
                 idx_a = st.session_state.db_papelaria.index[st.session_state.db_papelaria['Produto'] == sel_a][0]
                 st.session_state.db_papelaria.at[idx_a, 'Estoque_Atual'] += qtd_a
-                st.success("Produto disponível para venda!")
-
-        # Módulos de Expedição e Distribuição seguem a lógica anterior...
-        elif tarefa == "📤 Expedição":
-            st.subheader("Picking")
-            st.info("Siga as orientações de retirada conforme o pedido.")
+                st.success(f"{sel_a} agora está disponível no saldo real!")
 
 else:
-    if senha: st.error("Acesso Negado.")
+    st.warning("Por favor, faça o login.")
