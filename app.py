@@ -20,7 +20,7 @@ if 'fluxo_ativo' not in st.session_state:
     st.session_state.fluxo_ativo = {'conferencia': False, 'expedicao': False, 'distribuicao': False}
 
 # --- MOTOR LOGÍSTICO ---
-def inteligência_estoque(df):
+def inteligencia_estoque(df):
     if df.empty: return df
     df['Impacto'] = df['Preco_Custo'].astype(float) * df['Giro_Mensal'].astype(float)
     df = df.sort_values(by='Impacto', ascending=False)
@@ -65,7 +65,7 @@ if (perfil == "Administrador" and senha == "admin123") or (perfil == "Conferente
                         'Giro_Mensal': giro, 'Estoque_Atual': 0, 'Status': 'Ativo'
                     }])
                     st.session_state.db_papelaria = pd.concat([st.session_state.db_papelaria, novo], ignore_index=True)
-                    st.session_state.db_papelaria = inteligência_estoque(st.session_state.db_papelaria)
+                    st.session_state.db_papelaria = inteligencia_estoque(st.session_state.db_papelaria)
                     st.success(f"{nome} cadastrado!")
 
         with tab_recebe:
@@ -94,34 +94,36 @@ if (perfil == "Administrador" and senha == "admin123") or (perfil == "Conferente
         if tarefa == "🔍 Conferência":
             st.header("Notas para Contagem")
             
-            # Filtra apenas notas que ainda possuem itens não validados
-            nfs_ativas = {k: v for k, v in st.session_state.nfs_liberadas.items() if any(not i['validado'] for i in v['itens'])}
+            # CORREÇÃO DO KEYERROR: Verificação segura das notas ativas
+            nfs_ativas = {
+                k: v for k, v in st.session_state.nfs_liberadas.items() 
+                if any(not i.get('validado', False) for i in v.get('itens', []))
+            }
             
             if not nfs_ativas:
                 st.info("✅ Tudo limpo! Nenhuma nota pendente de conferência.")
             else:
                 for chave, dados in nfs_ativas.items():
                     with st.expander(f"📦 NF: ...{chave[-6:]}", expanded=True):
-                        for i, item in enumerate(dados['itens']):
-                            # O item só aparece se ainda não foi validado
-                            if not item['validado']:
+                        for i, item in enumerate(dados.get('itens', [])):
+                            if not item.get('validado', False):
                                 st.write(f"👉 **Contar:** {item['item']}")
                                 col1, col2 = st.columns([2, 1])
                                 qtd_c = col1.number_input(f"Qtd Real de {item['item']}", min_value=0, key=f"c_{chave}_{i}")
                                 if col2.button("Validar", key=f"b_{chave}_{i}"):
                                     if qtd_c == item['qtd_esperada']:
                                         item['validado'] = True
-                                        st.rerun() # Atualiza a tela para remover o item validado
+                                        st.rerun()
                                     else:
                                         st.error("Divergência detectada!")
 
         elif tarefa == "🏷️ Endereçamento":
             st.header("Etiquetas Pendentes")
-            # Só permite endereçar itens que já foram validados na conferência
             itens_prontos = []
             for nf in st.session_state.nfs_liberadas.values():
-                for i in nf['itens']:
-                    if i['validado']: itens_prontos.append(i['item'])
+                for i in nf.get('itens', []):
+                    if i.get('validado', False): 
+                        itens_prontos.append(i['item'])
             
             if not itens_prontos:
                 st.warning("Nenhum item validado para endereçamento.")
@@ -133,7 +135,7 @@ if (perfil == "Administrador" and senha == "admin123") or (perfil == "Conferente
 
         elif tarefa == "📦 Armazenamento":
             st.header("Guardar no Estoque")
-            sel_a = st.selectbox("Produto para Armazenar:", st.session_state.db_papelaria['Produto'])
+            sel_a = st.selectbox("Produto para Armazenar:", st.session_state.db_papelaria['Produto'].tolist())
             qtd_a = st.number_input("Qtd Guardada", min_value=1)
             if st.button("Finalizar Ciclo"):
                 idx_a = st.session_state.db_papelaria.index[st.session_state.db_papelaria['Produto'] == sel_a][0]
@@ -141,4 +143,4 @@ if (perfil == "Administrador" and senha == "admin123") or (perfil == "Conferente
                 st.success(f"{sel_a} agora está disponível no saldo real!")
 
 else:
-    st.warning("Por favor, faça o login.")
+    st.warning("Por favor, faça o login no painel lateral.")
