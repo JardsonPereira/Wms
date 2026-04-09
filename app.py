@@ -3,154 +3,153 @@ import pandas as pd
 import datetime
 import plotly.express as px
 
-# Configuração da Página
-st.set_page_config(page_title="WMS Almoxarifado Pro", layout="wide")
+# --- CONFIGURAÇÃO DA PÁGINA ---
+st.set_page_config(page_title="NexLOG | WMS Intelligence", layout="wide", initial_sidebar_state="expanded")
 
-# --- INICIALIZAÇÃO DO BANCO DE DADOS (SESSION STATE) ---
-if 'db_wms' not in st.session_state:
-    st.session_state.db_wms = pd.DataFrame(columns=[
-        'ID', 'Produto', 'Categoria', 'Valor', 'Giro', 'Classe_ABC', 
-        'Endereco', 'Status', 'Saldo_Estoque'
+# Custom CSS para estética "High-Tech"
+st.markdown("""
+    <style>
+    .main { background-color: #f5f7f9; }
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #004b95; color: white; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- INICIALIZAÇÃO DE DADOS ---
+if 'db' not in st.session_state:
+    st.session_state.db = pd.DataFrame(columns=[
+        'ID', 'Produto', 'Categoria', 'Custo', 'Giro_Previsto', 'Classe', 'Endereco', 'Saldo', 'Status'
     ])
 
-if 'liberacoes' not in st.session_state:
-    st.session_state.liberacoes = {'expedicao': False, 'distribuicao': False}
+if 'fluxo' not in st.session_state:
+    st.session_state.fluxo = {'exp': False, 'dist': False}
 
-# --- FUNÇÕES DE LÓGICA LOGÍSTICA ---
-def processar_abc_e_endereco(df):
+# --- MOTOR DE INTELIGÊNCIA LOGÍSTICA ---
+def atualizar_inteligencia(df):
     if df.empty: return df
-    df['Impacto'] = df['Valor'].astype(float) * df['Giro'].astype(float)
+    # Cálculo Curva ABC (Baseado no valor de estoque teórico e giro)
+    df['Impacto'] = df['Custo'].astype(float) * df['Giro_Previsto'].astype(float)
     df = df.sort_values(by='Impacto', ascending=False)
-    df['Acumulado'] = df['Impacto'].cumsum() / df['Impacto'].sum()
+    df['Perc'] = df['Impacto'].cumsum() / df['Impacto'].sum()
     
-    def definir_classe(p):
+    def classe_abc(p):
         if p <= 0.7: return 'A'
         elif p <= 0.9: return 'B'
         else: return 'C'
         
-    df['Classe_ABC'] = df['Acumulado'].apply(definir_classe)
-    # Regra de Endereçamento: Itens A ficam perto da expedição (Rua 1), C ao fundo (Rua 3)
-    mapa_ruas = {'A': 'RUA-01', 'B': 'RUA-02', 'C': 'RUA-03'}
-    df['Endereco'] = df['Classe_ABC'].apply(lambda x: f"{mapa_ruas[x]}-BOX-{datetime.datetime.now().microsecond % 50}")
+    df['Classe'] = df['Perc'].apply(classe_abc)
+    # Endereçamento Inteligente: Classe A na Rua 1 (Próximo à doca)
+    df['Endereco'] = df['Classe'].apply(lambda x: f"R{ord(x)-64}-N0{datetime.datetime.now().microsecond % 9}-P{datetime.datetime.now().microsecond % 5}")
     return df
 
-# --- INTERFACE DE LOGIN ---
+# --- BARRA LATERAL (AUTENTICAÇÃO) ---
 with st.sidebar:
-    st.header("🔑 Acesso WMS")
-    st.info("**Credenciais:**\n\n- **ADM:** `admin123` \n- **Conferente:** `conf123` ")
-    perfil = st.selectbox("Perfil", ["Conferente", "Administrador"])
-    senha = st.text_input("Senha", type="password")
+    st.image("https://cdn-icons-png.flaticon.com/512/2343/2343894.png", width=100)
+    st.title("NexLOG WMS")
+    st.info("**Acesso Rápido:**\n\nAdmin: `admin123` | Conf: `conf123` ")
+    
+    user = st.selectbox("Usuário", ["Conferente", "Administrador"])
+    pw = st.text_input("Senha", type="password")
 
-# --- VALIDAÇÃO DE ACESSO ---
-acesso_adm = (perfil == "Administrador" and senha == "admin123")
-acesso_conf = (perfil == "Conferente" and senha == "conf123")
+# --- LÓGICA DE NAVEGAÇÃO ---
+if (user == "Administrador" and pw == "admin123") or (user == "Conferente" and pw == "conf123"):
+    
+    if user == "Administrador":
+        st.title("🛡️ Dashboard de Gestão Estratégica")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("SKUs Cadastrados", len(st.session_state.db))
+        m2.metric("Valor Total em Estoque", f"R$ {(st.session_state.db['Saldo'] * st.session_state.db['Custo']).sum():,.2f}")
+        m3.metric("Acuracidade", "100%", "0.5%")
+        m4.metric("Status Expedição", "LIBERADO" if st.session_state.fluxo['exp'] else "BLOQUEADO")
 
-if acesso_adm or acesso_conf:
-    st.title(f"📦 Sistema de Gestão de Almoxarifado - {perfil}")
+        aba_cad, aba_inv, aba_ctr = st.tabs(["🆕 Cadastro de SKU", "📊 BI & Inventário", "⚙️ Controle de Fluxo"])
 
-    # --- MENU ADMINISTRADOR ---
-    if acesso_adm:
-        menu_adm = st.tabs(["📑 Cadastro", "📊 Relatórios e ABC", "🔓 Liberação de Fluxo"])
-        
-        with menu_adm[0]:
-            st.subheader("Cadastro de Novos Produtos")
-            with st.form("form_cad"):
-                col1, col2 = st.columns(2)
-                nome = col1.text_input("Nome do Produto")
-                cat = col1.selectbox("Categoria", ["Escritório", "Papelaria", "Informática", "Limpeza"])
-                val = col2.number_input("Valor Unitário (R$)", min_value=0.01)
-                giro = col2.number_input("Giro Mensal Estimado", min_value=1)
-                if st.form_submit_button("Salvar Produto"):
-                    novo_prod = pd.DataFrame([{
-                        'ID': len(st.session_state.db_wms)+1, 'Produto': nome, 'Categoria': cat,
-                        'Valor': val, 'Giro': giro, 'Status': 'Ativo', 'Saldo_Estoque': 0
+        with aba_cad:
+            with st.form("cad_sku"):
+                c1, c2 = st.columns(2)
+                nome = c1.text_input("Nome do Material")
+                cat = c1.selectbox("Categoria", ["Suprimentos", "Papelaria", "TI", "Mobiliário"])
+                custo = c2.number_input("Custo Unitário", min_value=0.01)
+                giro = c2.number_input("Demanda Mensal Estimada", min_value=1)
+                if st.form_submit_button("Finalizar Cadastro"):
+                    novo = pd.DataFrame([{
+                        'ID': len(st.session_state.db)+1, 'Produto': nome, 'Categoria': cat,
+                        'Custo': custo, 'Giro_Previsto': giro, 'Saldo': 0, 'Status': 'Ativo'
                     }])
-                    st.session_state.db_wms = pd.concat([st.session_state.db_wms, novo_prod], ignore_index=True)
-                    st.session_state.db_wms = processar_abc_e_endereco(st.session_state.db_wms)
-                    st.success("Item cadastrado e endereçado automaticamente!")
+                    st.session_state.db = pd.concat([st.session_state.db, novo], ignore_index=True)
+                    st.session_state.db = atualizar_inteligencia(st.session_state.db)
+                    st.success("SKU Cadastrado com Estratégia de Endereçamento!")
 
-        with menu_adm[1]:
-            st.subheader("Análise de Inventário e Curva ABC")
-            st.dataframe(st.session_state.db_wms, use_container_width=True)
-            if not st.session_state.db_wms.empty:
-                fig = px.bar(st.session_state.db_wms, x='Produto', y='Saldo_Estoque', color='Classe_ABC', title="Saldo por Produto e Classe")
+        with aba_inv:
+            st.dataframe(st.session_state.db[['ID', 'Produto', 'Classe', 'Endereco', 'Saldo', 'Custo']], use_container_width=True)
+            if not st.session_state.db.empty:
+                fig = px.pie(st.session_state.db, names='Classe', title="Ocupação por Curva ABC", hole=0.4)
                 st.plotly_chart(fig)
 
-        with menu_adm[2]:
-            st.subheader("Controle de Operações")
-            st.session_state.liberacoes['expedicao'] = st.toggle("Liberar EXPEDIÇÃO para equipe", value=st.session_state.liberacoes['expedicao'])
-            st.session_state.liberacoes['distribuicao'] = st.toggle("Liberar DISTRIBUIÇÃO para equipe", 
-                                                                   value=st.session_state.liberacoes['distribuicao'], 
-                                                                   disabled=not st.session_state.liberacoes['expedicao'])
+        with aba_ctr:
+            st.subheader("Configurações de Operação")
+            st.session_state.fluxo['exp'] = st.toggle("Habilitar Módulo de Expedição", st.session_state.fluxo['exp'])
+            st.session_state.fluxo['dist'] = st.toggle("Habilitar Módulo de Distribuição", st.session_state.fluxo['dist'], disabled=not st.session_state.fluxo['exp'])
+            if st.button("Limpar Logs de Sistema"): st.toast("Logs limpos!")
 
-    # --- MENU CONFERENTE ---
-    if acesso_conf:
-        # Menus solicitados
-        opcoes = ["📥 Recebimento", "🔍 Conferência", "📍 Endereçamento", "📦 Armazenamento"]
+    if user == "Conferente":
+        st.title("🚀 Operação de Fluxo")
+        menu = ["📥 Recebimento", "🔍 Conferência", "📍 Endereçamento", "📦 Armazenamento"]
+        if st.session_state.fluxo['exp']: menu.append("📤 Expedição")
+        if st.session_state.fluxo['dist']: menu.append("🚚 Distribuição")
         
-        if st.session_state.liberacoes['expedicao']: opcoes.append("📤 Expedição")
-        if st.session_state.liberacoes['distribuicao']: opcoes.append("🚚 Distribuição")
-        
-        tarefa = st.sidebar.radio("Selecione o Menu Operacional:", opcoes)
+        tarefa = st.sidebar.radio("Etapa do Processo", menu)
 
         if tarefa == "📥 Recebimento":
-            st.subheader("Entrada de Materiais")
-            if st.session_state.db_wms.empty: st.warning("Nenhum produto no mestre de cadastro.")
-            else:
-                prod_rec = st.selectbox("Produto Chegando:", st.session_state.db_wms['Produto'])
-                qtd_rec = st.number_input("Quantidade em Nota:", min_value=1)
-                if st.button("Registrar Entrada"):
-                    st.info(f"Recebimento de {qtd_rec} unid. de {prod_rec} iniciado. Siga para a Conferência.")
+            st.subheader("Entrada de Inbound")
+            prod = st.selectbox("Selecionar Item em Doca", st.session_state.db['Produto'])
+            st.number_input("Quantidade da Nota Fiscal", min_value=1)
+            if st.button("Iniciar Conferência"): st.warning("Mova o palete para a zona de conferência.")
 
         elif tarefa == "🔍 Conferência":
-            st.subheader("Conferência Cega / Qualidade")
-            sel_conf = st.selectbox("Confirmar Item:", st.session_state.db_wms['Produto'])
-            qtd_conf = st.number_input("Quantidade Física Contada:", min_value=1)
-            if st.button("Validar Quantidades"):
-                st.success("Conferência concluída sem divergências!")
+            st.subheader("Verificação de Qualidade e Qtd")
+            sel = st.selectbox("Confirmar Produto", st.session_state.db['Produto'])
+            qtd = st.number_input("Quantidade Contada", min_value=1)
+            if st.button("Validar"): st.success("Conferência cega bateu com a NF!")
 
         elif tarefa == "📍 Endereçamento":
-            st.subheader("Geração de Etiqueta e Destino")
-            sel_end = st.selectbox("Gerar Etiqueta para:", st.session_state.db_wms['Produto'])
-            idx = st.session_state.db_wms.index[st.session_state.db_wms['Produto'] == sel_end][0]
-            
+            st.subheader("Etiquetagem Inteligente")
+            sel = st.selectbox("Produto para Etiquetar", st.session_state.db['Produto'])
+            idx = st.session_state.db.index[st.session_state.db['Produto'] == sel][0]
+            end = st.session_state.db.at[idx, 'Endereco']
             st.markdown(f"""
-            <div style="border:3px solid #000; padding:20px; background-color:white; color:black; text-align:center">
-                <h2>ETIQUETA DE ARMAZENAGEM</h2>
-                <hr>
-                <h1>{st.session_state.db_wms.at[idx, 'Endereco']}</h1>
-                <p>PRODUTO: {sel_end} | CLASSE: {st.session_state.db_wms.at[idx, 'Classe_ABC']}</p>
-                <p>DATA: {datetime.date.today()}</p>
-            </div>
+                <div style="background:white; border:2px dashed #333; padding:20px; text-align:center; color:black">
+                    <h3>ETIQUETA NEXLOG</h3>
+                    <h1 style="font-size: 50px">{end}</h1>
+                    <p><b>{sel}</b> | CLASSE {st.session_state.db.at[idx, 'Classe']}</p>
+                </div>
             """, unsafe_allow_html=True)
 
         elif tarefa == "📦 Armazenamento":
-            st.subheader("Confirmação de Guardada")
-            sel_arm = st.selectbox("Confirmar Armazenagem no Box:", st.session_state.db_wms['Produto'])
-            qtd_arm = st.number_input("Quantidade Guardada:", min_value=1)
-            if st.button("Finalizar e Atualizar Estoque"):
-                idx = st.session_state.db_wms.index[st.session_state.db_wms['Produto'] == sel_arm][0]
-                st.session_state.db_wms.at[idx, 'Saldo_Estoque'] += qtd_arm
-                st.success(f"Estoque atualizado! {sel_arm} disponível para venda/uso.")
+            st.subheader("Put-away (Guardada)")
+            sel = st.selectbox("Confirmar Guardada no Endereço", st.session_state.db['Produto'])
+            qtd_a = st.number_input("Qtd Guardada", min_value=1)
+            if st.button("Confirmar Armazenamento"):
+                idx = st.session_state.db.index[st.session_state.db['Produto'] == sel][0]
+                st.session_state.db.at[idx, 'Saldo'] += qtd_a
+                st.balloons()
+                st.success("Estoque Atualizado!")
 
         elif tarefa == "📤 Expedição":
-            st.subheader("Separação (Picking)")
-            sel_exp = st.selectbox("Item para Saída:", st.session_state.db_wms['Produto'])
-            qtd_exp = st.number_input("Quantidade Pedida:", min_value=1)
-            idx_exp = st.session_state.db_wms.index[st.session_state.db_wms['Produto'] == sel_exp][0]
-            
-            if st.button("Confirmar Separação"):
-                if st.session_state.db_wms.at[idx_exp, 'Saldo_Estoque'] >= qtd_exp:
-                    st.session_state.db_wms.at[idx_exp, 'Saldo_Estoque'] -= qtd_exp
-                    st.success("Picking realizado. Item movido para doca de saída.")
-                else:
-                    st.error("Saldo insuficiente em estoque!")
+            st.subheader("Picking (Separação)")
+            sel = st.selectbox("Produto para Saída", st.session_state.db['Produto'])
+            qtd_s = st.number_input("Qtd para Picking", min_value=1)
+            idx = st.session_state.db.index[st.session_state.db['Produto'] == sel][0]
+            if st.button("Confirmar Saída"):
+                if st.session_state.db.at[idx, 'Saldo'] >= qtd_s:
+                    st.session_state.db.at[idx, 'Saldo'] -= qtd_s
+                    st.success("Saída autorizada!")
+                else: st.error("Erro: Estoque insuficiente!")
 
         elif tarefa == "🚚 Distribuição":
-            st.subheader("Expedição Final / Carregamento")
-            st.write("Aguardando romaneio de carga...")
-            st.info("Fluxo de distribuição liberado pelo Administrador.")
+            st.subheader("Last Mile / Distribuição")
+            st.info("Consolidando cargas para transporte...")
 
 else:
-    if senha: st.error("Senha inválida.")
-    else: st.info("Use o painel lateral para acessar o sistema.")
+    if pw: st.error("Acesso Negado")
+    else: st.warning("Aguardando Login...")
